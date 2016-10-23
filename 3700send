@@ -38,6 +38,18 @@ class Sender():
     def log(self, string):
         sys.stderr.write(datetime.datetime.now().strftime("%H:%M:%S.%f") + " " + string + "\n")
 
+    def start(self):
+        while True:
+            # Try to send next packet; break if no more data
+            if (not self.send_packets()):
+                self.log("EOF reached")
+                self.sock.sendto(json.dumps({"eof": True, "data": "", "sequence": self.sequence, "ack": False}),
+                                 self.dest)
+                sys.exit(0)
+
+            self.ack_packets()
+            self._retransmit_packets()
+
     def send_packets(self):
         while (len(self.packet_buffer) < self.cwnd):
             # can push more packets onto the wire
@@ -50,7 +62,6 @@ class Sender():
                     self.sequence += len(data)
                     self.packet_buffer[self.sequence] = {'msg': msg,
                                                          'time_sent': time()}
-                    self.cwnd -= 1
             else:
                 return False
 
@@ -61,18 +72,6 @@ class Sender():
             self.log("[error] unable to fully send packet")
             return False
         return True
-
-    def start(self):
-        while True:
-            # Try to send next packet; break if no more data
-            if (not self.send_packets()):
-                self.log("EOF reached")
-                self.sock.sendto(json.dumps({"eof": True, "data": "", "sequence": self.sequence, "ack": False}),
-                                 self.dest)
-                sys.exit(0)
-
-            self.ack_packets()
-            self._retransmit_packets()
 
     def ack_packets(self):
         # Now read in data, send packets
@@ -88,7 +87,7 @@ class Sender():
 
                 # know we successfully ack'ed a packet if we get here
                 self.log("[recv ack] " + str(ack_num))
-                self.cwnd += 2 #TODO: make this smart
+                self.cwnd += 1 #TODO: make this smart
 
             except (ValueError, KeyError, TypeError), e:
                 self.log("[recv corrupt packet]" + str(e) + str(self.packet_buffer))
