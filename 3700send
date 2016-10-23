@@ -11,10 +11,12 @@ import datetime
 import select
 import json
 import errno
+from time import time
 
 MSG_SIZE = 1500
 DATA_SIZE = 1000
 TIMEOUT = 30
+RTO = 5
 
 
 class Sender():
@@ -43,16 +45,21 @@ class Sender():
             if (len(data) > 0):
                 msg = json.dumps({"sequence": self.sequence, "data": data, "ack": False, "eof": False})
 
-                if self.sock.sendto(msg, self.dest) < len(msg):
-                    self.log("[error] unable to fully send packet")
-                else:
+                if self._send_packet(msg):
                     self.log("[send data] " + str(self.sequence) + " (" + str(len(data)) + ")")
                     self.sequence += len(data)
-                    self.packet_buffer[self.sequence] = msg
+                    self.packet_buffer[self.sequence] = {'msg': msg,
+                                                         'time_sent': time()}
                     self.cwnd -= 1
             else:
                 return False
 
+        return True
+
+    def _send_packet(self, msg):
+        if self.sock.sendto(msg, self.dest) < len(msg):
+            self.log("[error] unable to fully send packet")
+            return False
         return True
 
     def start(self):
@@ -65,6 +72,7 @@ class Sender():
                 sys.exit(0)
 
             self.ack_packets()
+            self._retransmit_packets()
 
     def ack_packets(self):
         # Now read in data, send packets
@@ -80,7 +88,7 @@ class Sender():
 
                 # know we successfully ack'ed a packet if we get here
                 self.log("[recv ack] " + str(ack_num))
-                self.cwnd += 1
+                self.cwnd += 2 #TODO: make this smart
 
             except (ValueError, KeyError, TypeError), e:
                 self.log("[recv corrupt packet]" + str(e) + str(self.packet_buffer))
@@ -100,6 +108,17 @@ class Sender():
 
         return msg
 
+    def _retransmit_packets(self):
+        curr_time = time()
+
+        for data in self.packet_buffer.itervalues():
+            time_sent = data['time_sent']
+            msg = data['msg']
+
+            if (curr_time - time_sent) > RTO:
+                if self._send_packet(msg):
+                    self.log('retransmitting packet')
+                    data['time_sent'] = curr_time
 
 if __name__ == "__main__":
     sender = Sender()
