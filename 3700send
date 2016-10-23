@@ -12,12 +12,13 @@ import select
 import json
 import errno
 from time import time
+import traceback
 
 MSG_SIZE = 1500
 DATA_SIZE = 1000
 TIMEOUT = 30
-RTO = 5
-
+NEW_RTT_LEAN = .875 #0 means trust new RTT all the way, 1 means trust the old RTT all the way
+RTO_TO_RTT_FACTOR = 5 #RTO will be 5 * RTT
 
 class Sender():
     def __init__(self):
@@ -34,6 +35,10 @@ class Sender():
         self.sequence = 0
         self.cwnd = 1  # number of un-acked packets allowed to be in flight
         self.packet_buffer = {}  # keep track of un-acked packets (maps sequence nums to packets)
+
+        #these will get set once we get our first sample
+        self.rto = None
+        self.rtt = None
 
     def log(self, string):
         sys.stderr.write(datetime.datetime.now().strftime("%H:%M:%S.%f") + " " + string + "\n")
@@ -83,16 +88,27 @@ class Sender():
                 decoded = json.loads(data)
                 ack_num = decoded.get('ack')
 
-                self.packet_buffer.pop(ack_num)  # throws error if ack_num isn't there
+                acked_packet = self.packet_buffer.pop(ack_num)  # throws error if ack_num isn't there
 
                 # know we successfully ack'ed a packet if we get here
                 self.log("[recv ack] " + str(ack_num))
+                self.update_rtt(time() - acked_packet['time_sent'])
+
                 self.cwnd += 1 #TODO: make this smart
 
             except (ValueError, KeyError, TypeError), e:
                 self.log("[recv corrupt packet]" + str(e) + str(self.packet_buffer))
 
             result = self._read()
+
+    def update_rtt(self, new_sample):
+        old_rtt = self.rtt
+        if self.rtt:
+            self.rtt = (NEW_RTT_LEAN * self.rtt) + ((1 - NEW_RTT_LEAN) * new_sample)
+        else:
+            self.rtt = new_sample
+        self.rto = self.rtt * RTO_TO_RTT_FACTOR
+        self.log("old rtt: {}, sample: {}, new rtt: {}".format(old_rtt, new_sample, self.rtt))
 
     def _read(self):
         # returns msg or None if unable to read, doesn't block
@@ -114,10 +130,12 @@ class Sender():
             time_sent = data['time_sent']
             msg = data['msg']
 
-            if (curr_time - time_sent) > RTO:
+            if self.rto and (curr_time - time_sent) > self.rto:
                 if self._send_packet(msg):
                     self.log('retransmitting packet')
                     data['time_sent'] = curr_time
+
+                self.cwnd = 1
 
 if __name__ == "__main__":
     sender = Sender()
