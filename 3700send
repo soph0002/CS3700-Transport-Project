@@ -1,0 +1,106 @@
+#!/usr/bin/python -u
+#
+# CS3700, Spring 2015
+# Project 2 Starter Code
+#
+
+import sys
+import socket
+import time
+import datetime
+import select
+import json
+import errno
+
+MSG_SIZE = 1500
+DATA_SIZE = 1000
+TIMEOUT = 30
+
+
+class Sender():
+    def __init__(self):
+        # Bind to localhost and an ephemeral port
+        IP_PORT = sys.argv[1]
+        UDP_IP = IP_PORT[0:IP_PORT.find(":")]
+        UDP_PORT = int(IP_PORT[IP_PORT.find(":") + 1:])
+        self.dest = (UDP_IP, UDP_PORT)
+
+        # Set up the socket
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(0)  # want the socket to be non-blocking
+
+        self.sequence = 0
+        self.cwnd = 1  # number of un-acked packets allowed to be in flight
+        self.packet_buffer = {}  # keep track of un-acked packets (maps sequence nums to packets)
+
+    def log(self, string):
+        sys.stderr.write(datetime.datetime.now().strftime("%H:%M:%S.%f") + " " + string + "\n")
+
+    def send_packets(self):
+        while (len(self.packet_buffer) < self.cwnd):
+            # can push more packets onto the wire
+            data = sys.stdin.read(DATA_SIZE)
+            if (len(data) > 0):
+                msg = json.dumps({"sequence": self.sequence, "data": data, "ack": False, "eof": False})
+
+                if self.sock.sendto(msg, self.dest) < len(msg):
+                    self.log("[error] unable to fully send packet")
+                else:
+                    self.log("[send data] " + str(self.sequence) + " (" + str(len(data)) + ")")
+                    self.sequence += len(data)
+                    self.packet_buffer[self.sequence] = msg
+                    self.cwnd -= 1
+            else:
+                return False
+
+        return True
+
+    def start(self):
+        while True:
+            # Try to send next packet; break if no more data
+            if (not self.send_packets()):
+                self.log("EOF reached")
+                self.sock.sendto(json.dumps({"eof": True, "data": "", "sequence": self.sequence, "ack": False}),
+                                 self.dest)
+                sys.exit(0)
+
+            self.ack_packets()
+
+    def ack_packets(self):
+        # Now read in data, send packets
+        result = self._read()
+
+        while result:
+            (data, addr) = result
+            try:
+                decoded = json.loads(data)
+                ack_num = decoded.get('ack')
+
+                self.packet_buffer.pop(ack_num)  # throws error if ack_num isn't there
+
+                # know we successfully ack'ed a packet if we get here
+                self.log("[recv ack] " + str(ack_num))
+                self.cwnd += 1
+
+            except (ValueError, KeyError, TypeError), e:
+                self.log("[recv corrupt packet]" + str(e) + str(self.packet_buffer))
+
+            result = self._read()
+
+    def _read(self):
+        # returns msg or None if unable to read, doesn't block
+        try:
+            msg = self.sock.recvfrom(MSG_SIZE)
+        except socket.error, e:
+            err = e.args[0]
+            if err not in [errno.EAGAIN, errno.EWOULDBLOCK]:
+                # a "real" error occurred, otheriwse there was just no data available
+                self.log("Error while reading " + str(e))
+            msg = None
+
+        return msg
+
+
+if __name__ == "__main__":
+    sender = Sender()
+    sender.start()
