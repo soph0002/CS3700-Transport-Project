@@ -99,19 +99,19 @@ class Sender():
 
     def ack_packets(self):
         # Now read in data, send packets
-        result = self.rcv_packets()
+        result = self.recv_packets()
 
         while result:
-            (data, addr) = result
+            data, addr = result
             try:
                 decoded = json.loads(data)
-                ack_num = decoded.get('ack')
+                ack_num = decoded.get("ack")
 
                 acked_packet = self.packet_buffer.pop(ack_num)  # throws error if ack_num isn't there
 
                 # know we successfully ack'ed a packet if we get here
-                self.log("[recv ack] " + str(ack_num))
-                self.update_rtt(time() - acked_packet['time_sent'])
+                self.log("[recv ack] %d" % ack_num)
+                self.update_rtt(time() - acked_packet["time_sent"])
 
                 self.cwnd += 1 #TODO: make this smart
 
@@ -121,7 +121,7 @@ class Sender():
                     "buff": str(self.packet_buffer)
                 })
 
-            result = self.rcv_packets()
+            result = self.recv_packets()
 
     def update_rtt(self, new_sample):
         old_rtt = self.rtt
@@ -136,7 +136,7 @@ class Sender():
             "new": self.rtt
         })
 
-    def rcv_packets(self):
+    def recv_packets(self):
         # returns msg or None if unable to read, doesn't block
         try:
             return self.sock.recvfrom(MSG_SIZE)
