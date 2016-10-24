@@ -11,9 +11,21 @@ import datetime
 import select
 import json
 
+from logger import Logger
+
 MSG_SIZE = 1500
 TIMEOUT = 30
 
+
+class TimestampLogger(Logger):
+
+
+
+def main():
+    log = Logger({
+
+    })
+    Receiver().start()
 
 class Receiver():
     def __init__(self):
@@ -28,12 +40,13 @@ class Receiver():
 
         # Get port we bound to
         UDP_PORT = self.sock.getsockname()[1]
-        self.log("[bound] " + str(UDP_PORT))
+        self.log("[bound] %d" % UDP_PORT)
 
         self.next_sequence_to_print = 0
 
     def log(self, string):
-        sys.stderr.write(datetime.datetime.now().strftime("%H:%M:%S.%f") + " " + string + "\n")
+        sys.stderr.write(
+            datetime.datetime.now().strftime("%H:%M:%S.%f") + " " + string + "\n")
 
     def start(self):
         # Now listen for packets
@@ -42,43 +55,54 @@ class Receiver():
 
             # If nothing is ready, we hit the timeout
             if result:
-                (data, addr) = result
+                data, addr = result
 
                 try:
                     decoded = json.loads(data)
 
                     # If the EOF flag is set, exit
-                    if (decoded['eof']):
+                    if (decoded["eof"]):
                         self.log("[completed]")
-                        sys.exit(0)
+                        return
+
+                    data, seq = decoded["data"], decoded["sequence"]
+                    length = len(data)
 
                     # If there is data, we accept it and print it out
-                    if (decoded['data']):
-                        if decoded['sequence'] == self.next_sequence_to_print:
-                            self.log("[recv data] " + str(decoded['sequence'])
-                                     + " (" + str(len(decoded['data'])) + ") ACCEPTED (in-order)")
-                            sys.stdout.write(decoded['data'])
-                            self.next_sequence_to_print += len(decoded['data'])
+                    if (data):
+                        if seq == self.next_sequence_to_print:
+                            self.log("[recv data] %(seq)d (%(length)d) ACCEPTED (in-order)" % {
+                                "seq": seq,
+                                "length": length
+                            })
+
+                            sys.stdout.write(data)
+                            self.next_sequence_to_print += length
 
                             # Send back an ack to the sender
-                            msg = json.dumps({"ack": decoded['sequence'] + len(decoded['data'])})
-                            self.log("ABOUT TO SEND " + msg)
+                            msg = json.dumps({ "ack": seq + length })
+                            self.log("ABOUT TO SEND %s" % msg)
+
                             if self.sock.sendto(msg, addr) < len(msg):
                                 self.log("[error] unable to fully send packet")
-                        elif decoded['sequence'] < self.next_sequence_to_print:
-                            self.log("recieved a dup packet" +
-                                     str(decoded['sequence']) + " (" + str(len(decoded['data'])))
-                        elif decoded['sequence'] > self.next_sequence_to_print:
-                            self.log("recieved out of order packet" +
-                                     str(decoded['sequence']) + " (" + str(len(decoded['data'])))
 
-                except (ValueError, KeyError, TypeError) as e:
+                        elif seq < self.next_sequence_to_print:
+                            self.log("recieved a dup packet %(seq)d (%(length)d)" % {
+                                "seq": seq,
+                                "len": length
+                            })
+                        elif seq > self.next_sequence_to_print:
+                            self.log("recieved out of order packet %(seq)d (%(length)d)" % {
+                                "seq": seq,
+                                "len": length
+                            })
+
+                except (ValueError, KeyError, TypeError):
                     self.log("[recv corrupt packet]")
-                    raise e
+                    raise
             else:
                 self.log("[error] timeout")
-                sys.exit(-1)
+                raise RuntimeError("Error: read timeout")
 
 if __name__ == "__main__":
-    recvr = Receiver()
-    recvr.start()
+    main()
