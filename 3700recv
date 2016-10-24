@@ -11,20 +11,10 @@ import datetime
 import select
 import json
 
-from logger import Logger
-
 MSG_SIZE = 1500
 TIMEOUT = 30
 
-
-class TimestampLogger(Logger):
-
-
-
 def main():
-    log = Logger({
-
-    })
     Receiver().start()
 
 class Receiver():
