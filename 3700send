@@ -17,16 +17,19 @@ import traceback
 MSG_SIZE = 1500
 DATA_SIZE = 1000
 TIMEOUT = 30
-NEW_RTT_LEAN = .875 #0 means trust new RTT all the way, 1 means trust the old RTT all the way
-RTO_TO_RTT_FACTOR = 5 #RTO will be 5 * RTT
+# 0 means trust new RTT all the way
+# 1 means trust the old RTT all the way
+NEW_RTT_LEAN = .875
+# RTO will be 5 * RTT
+RTO_TO_RTT_FACTOR = 5
+
+def main(recv_host, recv_port):
+    Sender(recv_host, int(recv_port)).start()
 
 class Sender():
-    def __init__(self):
+    def __init__(self, recv_host, recv_port):
         # Bind to localhost and an ephemeral port
-        IP_PORT = sys.argv[1]
-        UDP_IP = IP_PORT[0:IP_PORT.find(":")]
-        UDP_PORT = int(IP_PORT[IP_PORT.find(":") + 1:])
-        self.dest = (UDP_IP, UDP_PORT)
+        self.dest = (recv_host, recv_port)
 
         # Set up the socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -36,43 +39,59 @@ class Sender():
         self.cwnd = 1  # number of un-acked packets allowed to be in flight
         self.packet_buffer = {}  # keep track of un-acked packets (maps sequence nums to packets)
 
-        #these will get set once we get our first sample
+        # these will get set once we get our first sample
         self.rto = None
         self.rtt = None
 
     def log(self, string):
-        sys.stderr.write(datetime.datetime.now().strftime("%H:%M:%S.%f") + " " + string + "\n")
+        sys.stderr.write(
+            datetime.datetime.now().strftime("%H:%M:%S.%f") + " " + string + "\n")
 
     def start(self):
         while True:
             # Try to send next packet; break if no more data
-            if (not self.send_packets()):
+            if not self.send_packets():
                 self.log("EOF reached")
-                self.sock.sendto(json.dumps({"eof": True, "data": "", "sequence": self.sequence, "ack": False}),
-                                 self.dest)
-                sys.exit(0)
+                self.sock.sendto(json.dumps({
+                    "eof": True,
+                    "data": "",
+                    "sequence": self.sequence,
+                    "ack": False
+                }), self.dest)
+                break
 
             self.ack_packets()
-            self._retransmit_packets()
+            self.retransmit_packets()
 
     def send_packets(self):
-        while (len(self.packet_buffer) < self.cwnd):
+        while len(self.packet_buffer) < self.cwnd:
             # can push more packets onto the wire
             data = sys.stdin.read(DATA_SIZE)
-            if (len(data) > 0):
-                msg = json.dumps({"sequence": self.sequence, "data": data, "ack": False, "eof": False})
+            if len(data) > 0:
+                msg = json.dumps({
+                    "sequence": self.sequence,
+                    "data": data,
+                    "ack": False,
+                    "eof": False
+                })
 
-                if self._send_packet(msg):
-                    self.log("[send data] " + str(self.sequence) + " (" + str(len(data)) + ")")
+                if self.send_packet(msg):
+                    self.log("[send data] %(seq)d (%(len)d)" % {
+                        "seq": self.sequence,
+                        "len": len(data)
+                    })
+                    # CHECK - should sequence just increment?
                     self.sequence += len(data)
-                    self.packet_buffer[self.sequence] = {'msg': msg,
-                                                         'time_sent': time()}
+                    self.packet_buffer[self.sequence] = {
+                        "msg": msg,
+                        "time_sent": time()
+                    }
             else:
                 return False
 
         return True
 
-    def _send_packet(self, msg):
+    def send_packet(self, msg):
         if self.sock.sendto(msg, self.dest) < len(msg):
             self.log("[error] unable to fully send packet")
             return False
@@ -80,7 +99,7 @@ class Sender():
 
     def ack_packets(self):
         # Now read in data, send packets
-        result = self._read()
+        result = self.rcv_packets()
 
         while result:
             (data, addr) = result
@@ -97,9 +116,12 @@ class Sender():
                 self.cwnd += 1 #TODO: make this smart
 
             except (ValueError, KeyError, TypeError), e:
-                self.log("[recv corrupt packet]" + str(e) + str(self.packet_buffer))
+                self.log("[recv corrupt packet] %(err)s %(buff)s" % {
+                    "err": str(e),
+                    "buff": str(self.packet_buffer)
+                })
 
-            result = self._read()
+            result = self.rcv_packets()
 
     def update_rtt(self, new_sample):
         old_rtt = self.rtt
@@ -108,35 +130,34 @@ class Sender():
         else:
             self.rtt = new_sample
         self.rto = self.rtt * RTO_TO_RTT_FACTOR
-        self.log("old rtt: {}, sample: {}, new rtt: {}".format(old_rtt, new_sample, self.rtt))
+        self.log("old rtt: %(old)f, sample: %(sample)f, new rtt: %(new)f" % {
+            "old": old_rtt,
+            "sample": new_sample,
+            "new": self.rtt
+        })
 
-    def _read(self):
+    def rcv_packets(self):
         # returns msg or None if unable to read, doesn't block
         try:
-            msg = self.sock.recvfrom(MSG_SIZE)
+            return self.sock.recvfrom(MSG_SIZE)
         except socket.error, e:
-            err = e.args[0]
-            if err not in [errno.EAGAIN, errno.EWOULDBLOCK]:
+            if e.args[0] not in (errno.EAGAIN, errno.EWOULDBLOCK):
                 # a "real" error occurred, otheriwse there was just no data available
-                self.log("Error while reading " + str(e))
-            msg = None
+                self.log("Error while reading: %s" % str(e))
+            return None
 
-        return msg
-
-    def _retransmit_packets(self):
+    def retransmit_packets(self):
         curr_time = time()
 
         for data in self.packet_buffer.itervalues():
-            time_sent = data['time_sent']
-            msg = data['msg']
+            time_sent, msg = data["time_sent"], data["msg"]
 
             if self.rto and (curr_time - time_sent) > self.rto:
-                if self._send_packet(msg):
-                    self.log('retransmitting packet')
-                    data['time_sent'] = curr_time
+                if self.send_packet(msg):
+                    self.log("retransmitting packet")
+                    data["time_sent"] = curr_time
 
                 self.cwnd = 1
 
 if __name__ == "__main__":
-    sender = Sender()
-    sender.start()
+    main(*sys.argv[1].split(":"))
