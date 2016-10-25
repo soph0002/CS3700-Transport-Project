@@ -14,6 +14,8 @@ import errno
 from time import time
 import traceback
 
+from logger import Logger
+
 MSG_SIZE = 1500
 DATA_SIZE = 1000
 TIMEOUT = 30
@@ -22,6 +24,21 @@ TIMEOUT = 30
 NEW_RTT_LEAN = .875
 # RTO will be 5 * RTT
 RTO_TO_RTT_FACTOR = 5
+
+
+log = Logger({
+    "eof": "[eof] reached EOF",
+    "transfer_complete": "[completed]",
+    "packet_sent": "[send data] {seq_num} ({len})",
+    "packet_incomplete": "[error] packet send failed before completion",
+    "packet_ack": "[recv ack] {seq_num}",
+    "packet_corrupt": "[recv corrupt packet] received corrupt packet\n{error}\n",
+    "rtt_update": "old rtt: {old_rtt}, sample: {sample_rtt}, new rtt: {new_rtt}",
+    # "error"
+    # "Error while reading: %s"
+    # "retransmitting packet"
+}, stdout=sys.stderr)
+
 
 def main(recv_host, recv_port):
     Sender(recv_host, int(recv_port)).start()
@@ -51,7 +68,7 @@ class Sender():
         while True:
             # Try to send next packet; break if no more data
             if not self.send_packets():
-                self.log("EOF reached")
+                log.info("eof")
                 self.sock.sendto(json.dumps({
                     "eof": True,
                     "data": "",
@@ -62,6 +79,7 @@ class Sender():
 
             self.ack_packets()
             self.retransmit_packets()
+        log.success("transfer_complete")
 
     def send_packets(self):
         while len(self.packet_buffer) < self.cwnd:
@@ -76,11 +94,11 @@ class Sender():
                 })
 
                 if self.send_packet(msg):
-                    self.log("[send data] %(seq)d (%(len)d)" % {
-                        "seq": self.sequence,
-                        "len": len(data)
-                    })
-                    # CHECK - should sequence just increment?
+                    log.success("packet_sent",
+                        seq_num=self.sequence,
+                        len=len(data))
+
+                    # CHECK - shouldn't sequence just increment?
                     self.sequence += len(data)
                     self.packet_buffer[self.sequence] = {
                         "msg": msg,
@@ -93,7 +111,7 @@ class Sender():
 
     def send_packet(self, msg):
         if self.sock.sendto(msg, self.dest) < len(msg):
-            self.log("[error] unable to fully send packet")
+            log.err("packet_incomplete")
             return False
         return True
 
@@ -110,16 +128,14 @@ class Sender():
                 acked_packet = self.packet_buffer.pop(ack_num)  # throws error if ack_num isn't there
 
                 # know we successfully ack'ed a packet if we get here
-                self.log("[recv ack] %d" % ack_num)
+                log.success("packet_ack", seq_num=ack_num)
                 self.update_rtt(time() - acked_packet["time_sent"])
 
                 self.cwnd += 1 #TODO: make this smart
 
-            except (ValueError, KeyError, TypeError), e:
-                self.log("[recv corrupt packet] %(err)s %(buff)s" % {
-                    "err": str(e),
-                    "buff": str(self.packet_buffer)
-                })
+            except (ValueError, KeyError, TypeError) as e:
+                pass
+                # log.warn("packet_corrupt", error="")
 
             result = self.recv_packets()
 

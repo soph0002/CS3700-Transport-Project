@@ -11,11 +11,35 @@ import datetime
 import select
 import json
 
+from logger import Logger, FileLogger
+
+
 MSG_SIZE = 1500
 TIMEOUT = 30
 
+
+# def StdErrLogger(Logger):
+#     def _do_log(self, msg):
+#         """Logs to `stderr` instead of `stdout`"""
+#         sys.stderr.write(msg)
+#         sys.stderr.flush()
+
+
+# log = FileLogger("test.log", {
+#     "transfer_complete": "[complete]",
+#     "port_bound": "[bound] {port}",
+#     "packet_recv": "[recv data] {start} ({length}) {status}",
+#     "packet_corruct": "[recv corrupt packet]"
+#     # "[error] timeout"
+#     # "[completed]"
+#     # "ABOUT TO SEND %s"
+#     # "[error] unable to fully send packet"
+# })
+
+
 def main():
     Receiver().start()
+
 
 class Receiver():
     def __init__(self):
@@ -30,6 +54,7 @@ class Receiver():
 
         # Get port we bound to
         UDP_PORT = self.sock.getsockname()[1]
+        # log.success("port_bound", port=UDP_PORT)
         self.log("[bound] %d" % UDP_PORT)
 
         self.next_sequence_to_print = 0
@@ -93,6 +118,7 @@ class Receiver():
             else:
                 self.log("[error] timeout")
                 raise RuntimeError("Error: read timeout")
+
 
 if __name__ == "__main__":
     main()
