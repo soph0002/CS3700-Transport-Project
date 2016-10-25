@@ -34,7 +34,7 @@ log = Logger({
     "packet_ack": "[recv ack] {seq_num}",
     "packet_corrupt": "[recv corrupt packet] received corrupt packet\n{error}\n",
     "packet_retransmit": "[retransmit packet]",
-    "rtt_update": "[rtt update] old: {old:1.3f}, sample: {sample:1.3f}, new: {new:1.3f}"
+    "rtt_update": "[rtt update] old: {old:1.3f}s, sample: {sample:1.3f}s, new: {new:1.3f}s"
 }, stdout=sys.stderr)
 
 
@@ -64,10 +64,10 @@ class Sender():
             if not self.send_packets():
                 log.info("eof")
                 self.sock.sendto(json.dumps({
-                    "eof": True,
-                    "data": "",
                     "sequence": self.sequence,
+                    "data": "",
                     "ack": False
+                    "eof": True,
                 }), self.dest)
                 break
 
@@ -92,7 +92,6 @@ class Sender():
                         seq_num=self.sequence,
                         len=len(data))
 
-                    # CHECK - shouldn't sequence just increment?
                     self.sequence += len(data)
                     self.packet_buffer[self.sequence] = {
                         "msg": msg,

@@ -93,8 +93,8 @@ class Receiver():
                             start=seq, length=length, status=status)
 
                 except (ValueError, KeyError, TypeError):
-                    log.err("packet_corrupt")
-                    raise
+                    pass
+                    # log.err("packet_corrupt")
             else:
                 log.err("err_timeout")
                 raise RuntimeError("Error: read timeout")
