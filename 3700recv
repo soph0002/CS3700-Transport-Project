@@ -6,27 +6,25 @@
 
 import sys
 import socket
-import time
-import datetime
-import select
 import json
-import traceback
+import errno
 
 from logger import Logger
 
 
 MSG_SIZE = 1500
-TIMEOUT = 30
+TIMEOUT = 5
 
 
 log = Logger({
     "port_bound": "[bound] {port}",
-    "transfer_complete": "[completed]",
+    "transfer_complete": "[receiver completed]",
     "packet_recv": "[recv data] {start} ({length}) {status}",
     "packet_corrupt": "[recv corrupt packet]",
     "err_timeout": "[error] timeout waiting to read input data",
     "packet_incomplete": "[error] packet send failed before completion",
-    "out_of_order_print": "[out of order print] {start}"
+    "out_of_order_print": "[out of order print] {start}",
+    "fin_ack": "[receiver fin_ack sent]"
 }, stdout=sys.stderr)
 
 
@@ -39,7 +37,7 @@ class Receiver():
         # Set up the socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("", 0))
-        self.sock.settimeout(TIMEOUT)
+        self.sock.settimeout(0)
 
         # Get port we bound to
         UDP_PORT = int(self.sock.getsockname()[1])
@@ -53,10 +51,20 @@ class Receiver():
         #buffer for receiving out-of-order packets
         self.packet_buffer = {} #maps start seq nums to the data that needs to be printed when we get to that seq num
 
+    def recv_packet(self):
+        # returns msg or None if unable to read, doesn't block
+        try:
+            return self.sock.recvfrom(MSG_SIZE)
+        except socket.error, e:
+            if e.args[0] not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                # a "real" error occurred, otheriwse there was just no data available
+                log.err("error_read", error=str(e))
+            return None
+
     def start(self):
         # Now listen for packets
         while True:
-            result = self.sock.recvfrom(MSG_SIZE)
+            result = self.recv_packet()
 
             # If nothing is ready, we hit the timeout
             if result:
@@ -68,7 +76,8 @@ class Receiver():
                     # If the EOF flag is set, exit
                     if (decoded["eof"]):
                         log.success("transfer_complete")
-                        return
+                        self.fin_ack(addr)
+                        break
 
                     data, seq = decoded["data"], decoded["sequence"]
                     length = len(data)
@@ -99,8 +108,8 @@ class Receiver():
                 except Exception, e:
                     log.info("packet_corrupt")
             else:
-                log.info("err_timeout")
-                raise RuntimeError("Error: read timeout")
+                #nothing to read right now
+                pass
 
     def ack(self, ack_num, addr):
         # Send back an ack to the sender
@@ -108,6 +117,16 @@ class Receiver():
 
         if self.sock.sendto(msg, addr) < len(msg):
             log.info("packet_incomplete")
+
+    def fin_ack(self, addr):
+        # Send back an ack to the sender
+        msg = json.dumps({"fin_ack": True})
+
+        for i in range(5):
+            if self.sock.sendto(msg, addr) < len(msg):
+                log.info("packet_incomplete")
+            else:
+                log.info("fin_ack")
 
     def write_out_of_order_packets(self):
         try:

@@ -7,11 +7,10 @@
 import sys
 import socket
 import time
-import datetime
-import select
 import json
 import errno
-from time import time
+from time import time, sleep
+from decimal import Decimal
 import traceback
 
 from logger import Logger
@@ -25,10 +24,11 @@ NEW_RTT_LEAN = .875
 # RTO will be 5 * RTT
 RTO_TO_RTT_FACTOR = 5
 
+INITIAL_SS_THRESH = 10
 
 log = Logger({
     "eof": "[eof] reached EOF",
-    "transfer_complete": "[completed]",
+    "transfer_complete": "[sender completed]",
     "packet_sent": "[send data] {seq_num} ({len})",
     "packet_incomplete": "[error] packet send failed before completion",
     "packet_ack": "[send received-ack] {seq_num}",
@@ -36,7 +36,8 @@ log = Logger({
     "packet_retransmit": "[retransmit packet] {seq_num}",
     "rtt_update": "[rtt update] old: {old:1.3f}s, sample: {sample:1.3f}s, new: {new:1.3f}s",
     "cwnd_update": "[cwnd update] old: {old}, new: {new}",
-    "cwnd_reset": "[cwnd RESET] old: {old}, new: 1"
+    "cwnd_reset": "[cwnd RESET] old: {old}, new: 1",
+    "send_fin": "[sender sent fin]"
 }, stdout=sys.stderr)
 
 
@@ -53,33 +54,66 @@ class Sender():
         self.sock.settimeout(0)  # want the socket to be non-blocking
 
         self.sequence = 0
-        self.cwnd = 1  # number of un-acked packets allowed to be in flight
+        self.cwnd = Decimal(1.0)  # floor(cwnd) = number of un-acked packets allowed to be in flight
         self.packet_buffer = {}  # keep track of un-acked packets (maps sequence nums to packets)
 
         # these will get set once we get our first sample
         self.rto = None
         self.rtt = None
 
-    def start(self):
-        while True:
-            # Try to send next packet; break if no more data
-            if not self.send_packets() and not self.packet_buffer:
-                log.info("eof")
-                self.sock.sendto(json.dumps({
-                    "sequence": self.sequence,
-                    "data": "",
-                    "ack": False,
-                    "eof": True,
-                }), self.dest)
-                break
+        #when cwnd < ssthresh, slow start (exponential increase), else congestion avoidance (linear increase)
+        self.ssthresh = INITIAL_SS_THRESH
 
-            self.ack_packets()
-            self.retransmit_packets()
-        log.success("transfer_complete")
-        sys.stdout.flush()
+        self.fin_ack_received = False #set to True once we have sent the 'eof' message AND received the ack for it
+
+    def start(self):
+        try:
+            while True:
+                if not self.send_packets() and not self.packet_buffer:
+                    #have reached the end of the file and all packets have been ack'ed
+                    self.end_state()
+                    break;
+
+                self.ack_packets()
+                self.retransmit_packets()
+                sleep(.05) #idk why this is necessary but this stops it from hanging randomly
+            log.success("transfer_complete")
+            sys.stdout.flush()
+        except Exception:
+            traceback.print_exc()
+
+    def end_state(self):
+        log.info("eof")
+
+        while True:
+            log.info("send_fin")
+            self.sock.sendto(json.dumps({
+                "sequence": self.sequence,
+                "data": "",
+                "ack": False,
+                "eof": True,
+            }), self.dest)
+
+            #look for ack
+            result = self.recv_packets()
+
+            if result:
+                data, addr = result
+                try:
+                    decoded = json.loads(data)
+
+                    if decoded.get('fin_ack'):
+                        self.fin_ack_received = True
+                        break
+                    else:
+                        print "what"
+                except Exception:
+                    print "what2"
+            else:
+                sleep(.01)
 
     def send_packets(self):
-        while len(self.packet_buffer) < self.cwnd:
+        while len(self.packet_buffer) < int(self.cwnd): #floor of cwnd
             # can push more packets onto the wire
             data = sys.stdin.read(DATA_SIZE)
             if len(data) > 0:
@@ -119,6 +153,11 @@ class Sender():
             data, addr = result
             try:
                 decoded = json.loads(data)
+
+                if decoded.get('fin_ack'):
+                    self.fin_ack_received = True
+                    return
+
                 ack_num = decoded.get("ack")
 
                 acked_packet = self.packet_buffer.pop(ack_num)  # throws error if ack_num isn't there
@@ -127,8 +166,7 @@ class Sender():
                 log.success("packet_ack", seq_num=ack_num - DATA_SIZE) #the ack num sent back is start seq + DATA_SIZE
                 self.update_rtt(time() - acked_packet["time_sent"])
 
-                log.info("cwnd_update", old=self.cwnd, new=self.cwnd+1)
-                self.cwnd += 1 #TODO: make this smart
+                self.increase_cwnd()
             except KeyError:
                 #means we received a duplicate ack
                 pass
@@ -136,6 +174,19 @@ class Sender():
                 log.info("packet_corrupt", error="")
 
             result = self.recv_packets()
+
+    def increase_cwnd(self):
+        new_cwnd = None
+
+        if self.cwnd < self.ssthresh:
+            # slow start
+            new_cwnd = self.cwnd + Decimal(1)
+        else:
+            # congestion avoidance
+            new_cwnd = self.cwnd + Decimal(1)/self.cwnd
+
+        log.info("cwnd_update", old=self.cwnd, new=new_cwnd)
+        self.cwnd = new_cwnd
 
     def update_rtt(self, new_sample):
         old_rtt = self.rtt or 0
@@ -168,7 +219,14 @@ class Sender():
                     data["time_sent"] = curr_time
 
                 log.info("cwnd_reset", old=self.cwnd)
-                self.cwnd = 1
+                self.ssthresh = self.cwnd // 2 #floor division
+                self.cwnd = Decimal(1)
+
+            if not self.rto and len(self.packet_buffer) == 1:
+                #we are on the first packet and it was not ack'ed yet
+                #all the other variables (cwnd etc..) are irrelevant right now since we only have one packet
+                self.send_packet(msg)
+
 
 if __name__ == "__main__":
     main(*sys.argv[1].split(":"))
