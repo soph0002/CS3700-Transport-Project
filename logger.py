@@ -26,7 +26,7 @@ class Logger(object):
     # initialization time
     _internal_fmt_strings = {
         "err_msg":        "Error [{err_code}]: {err_msg}",
-        "err_no_fmt_str": "Could not find format string with key '{fmt_key}'",
+        "err_no_fmt_str": "Could not find format string with key '{bad_key}'",
         "err_fmt_no_key": "Missing value for format argument '{fmt_arg}' in format string '{bad_key}'",
         "err_bad_color":  "Color '{color}' not valid",
     }
@@ -117,7 +117,7 @@ class Logger(object):
                     fmt_arg=e.message, bad_key=fmt_key)
         except KeyError:
             # swallow and log the error if an invalid format string is specified
-            self._internal_error("err_no_fmt_str", fmt_key=fmt_key)
+            self._internal_error("err_no_fmt_str", bad_key=fmt_key)
 
         return result
 

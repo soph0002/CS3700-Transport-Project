@@ -11,30 +11,21 @@ import datetime
 import select
 import json
 
-from logger import Logger, FileLogger
+from logger import Logger
 
 
 MSG_SIZE = 1500
 TIMEOUT = 30
 
 
-# def StdErrLogger(Logger):
-#     def _do_log(self, msg):
-#         """Logs to `stderr` instead of `stdout`"""
-#         sys.stderr.write(msg)
-#         sys.stderr.flush()
-
-
-# log = FileLogger("test.log", {
-#     "transfer_complete": "[complete]",
-#     "port_bound": "[bound] {port}",
-#     "packet_recv": "[recv data] {start} ({length}) {status}",
-#     "packet_corruct": "[recv corrupt packet]"
-#     # "[error] timeout"
-#     # "[completed]"
-#     # "ABOUT TO SEND %s"
-#     # "[error] unable to fully send packet"
-# })
+log = Logger({
+    "port_bound": "[bound] {port}",
+    "transfer_complete": "[completed]",
+    "packet_recv": "[recv data] {start} ({length}) {status}",
+    "packet_corruct": "[recv corrupt packet]",
+    "err_timeout": "[error] timeout waiting to read input data",
+    "packet_incomplete": "[error] packet send failed before completion"
+}, stdout=sys.stderr)
 
 
 def main():
@@ -43,25 +34,19 @@ def main():
 
 class Receiver():
     def __init__(self):
-        # Bind to localhost and an ephemeral port
-        UDP_IP = "127.0.0.1"
-        UDP_PORT = 0
-
         # Set up the socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind((UDP_IP, UDP_PORT))
+        self.sock.bind(("", 0))
         self.sock.settimeout(TIMEOUT)
 
         # Get port we bound to
-        UDP_PORT = self.sock.getsockname()[1]
-        # log.success("port_bound", port=UDP_PORT)
-        self.log("[bound] %d" % UDP_PORT)
+        UDP_PORT = int(self.sock.getsockname()[1])
+
+        # For some reason, the first will not print. Why? I don't know.
+        log.success("port_bound", port=UDP_PORT)
+        log.success("port_bound", port=UDP_PORT)
 
         self.next_sequence_to_print = 0
-
-    def log(self, string):
-        sys.stderr.write(
-            datetime.datetime.now().strftime("%H:%M:%S.%f") + " " + string + "\n")
 
     def start(self):
         # Now listen for packets
@@ -77,7 +62,7 @@ class Receiver():
 
                     # If the EOF flag is set, exit
                     if (decoded["eof"]):
-                        self.log("[completed]")
+                        log.success("transfer_complete")
                         return
 
                     data, seq = decoded["data"], decoded["sequence"]
@@ -85,38 +70,33 @@ class Receiver():
 
                     # If there is data, we accept it and print it out
                     if (data):
+                        status = ""
+
                         if seq == self.next_sequence_to_print:
-                            self.log("[recv data] %(seq)d (%(length)d) ACCEPTED (in-order)" % {
-                                "seq": seq,
-                                "length": length
-                            })
+                            status = "ACCEPTED (in-order)"
 
                             sys.stdout.write(data)
                             self.next_sequence_to_print += length
 
                             # Send back an ack to the sender
                             msg = json.dumps({ "ack": seq + length })
-                            self.log("ABOUT TO SEND %s" % msg)
 
                             if self.sock.sendto(msg, addr) < len(msg):
-                                self.log("[error] unable to fully send packet")
+                                log.err("packet_incomplete")
 
                         elif seq < self.next_sequence_to_print:
-                            self.log("recieved a dup packet %(seq)d (%(length)d)" % {
-                                "seq": seq,
-                                "len": length
-                            })
+                            status = "IGNORED"
                         elif seq > self.next_sequence_to_print:
-                            self.log("recieved out of order packet %(seq)d (%(length)d)" % {
-                                "seq": seq,
-                                "len": length
-                            })
+                            status = "ACCEPTED (out-of-order)"
+
+                        log.success("packet_recv",
+                            start=seq, length=length, status=status)
 
                 except (ValueError, KeyError, TypeError):
-                    self.log("[recv corrupt packet]")
+                    log.err("packet_corrupt")
                     raise
             else:
-                self.log("[error] timeout")
+                log.err("err_timeout")
                 raise RuntimeError("Error: read timeout")
 
 
