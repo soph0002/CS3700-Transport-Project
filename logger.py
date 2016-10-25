@@ -91,13 +91,12 @@ class Logger(object):
 
     def _do_log(self, msg, file):
         """Perform the actual log operation (may be overridden)"""
-        file.write(msg + " <%s>\n" % file.name)
+        file.write(msg + "\n")
         file.flush()
 
 
     def _internal_error(self, err_code, **kwargs):
         """Log an internal error within the logger itself"""
-
         # add prefix and contribute the err_code to the format arguments
         err_msg = self._format(err_code, err_code=err_code, **kwargs)
         return self.error("err_msg", err_code=err_code, err_msg=err_msg)
