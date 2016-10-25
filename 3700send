@@ -31,10 +31,12 @@ log = Logger({
     "transfer_complete": "[completed]",
     "packet_sent": "[send data] {seq_num} ({len})",
     "packet_incomplete": "[error] packet send failed before completion",
-    "packet_ack": "[recv ack] {seq_num}",
+    "packet_ack": "[send received-ack] {seq_num}",
     "packet_corrupt": "[recv corrupt packet] received corrupt packet\n{error}\n",
-    "packet_retransmit": "[retransmit packet]",
-    "rtt_update": "[rtt update] old: {old:1.3f}s, sample: {sample:1.3f}s, new: {new:1.3f}s"
+    "packet_retransmit": "[retransmit packet] {seq_num}",
+    "rtt_update": "[rtt update] old: {old:1.3f}s, sample: {sample:1.3f}s, new: {new:1.3f}s",
+    "cwnd_update": "[cwnd update] old: {old}, new: {new}",
+    "cwnd_reset": "[cwnd RESET] old: {old}, new: 1"
 }, stdout=sys.stderr)
 
 
@@ -61,12 +63,12 @@ class Sender():
     def start(self):
         while True:
             # Try to send next packet; break if no more data
-            if not self.send_packets():
+            if not self.send_packets() and not self.packet_buffer:
                 log.info("eof")
                 self.sock.sendto(json.dumps({
                     "sequence": self.sequence,
                     "data": "",
-                    "ack": False
+                    "ack": False,
                     "eof": True,
                 }), self.dest)
                 break
@@ -74,6 +76,7 @@ class Sender():
             self.ack_packets()
             self.retransmit_packets()
         log.success("transfer_complete")
+        sys.stdout.flush()
 
     def send_packets(self):
         while len(self.packet_buffer) < self.cwnd:
@@ -121,14 +124,16 @@ class Sender():
                 acked_packet = self.packet_buffer.pop(ack_num)  # throws error if ack_num isn't there
 
                 # know we successfully ack'ed a packet if we get here
-                log.success("packet_ack", seq_num=ack_num)
+                log.success("packet_ack", seq_num=ack_num - DATA_SIZE) #the ack num sent back is start seq + DATA_SIZE
                 self.update_rtt(time() - acked_packet["time_sent"])
 
+                log.info("cwnd_update", old=self.cwnd, new=self.cwnd+1)
                 self.cwnd += 1 #TODO: make this smart
-
-            except (ValueError, KeyError, TypeError), e:
+            except KeyError:
+                #means we received a duplicate ack
                 pass
-                # log.warn("packet_corrupt", error="")
+            except Exception, e:
+                log.info("packet_corrupt", error="")
 
             result = self.recv_packets()
 
@@ -148,21 +153,21 @@ class Sender():
         except socket.error, e:
             if e.args[0] not in (errno.EAGAIN, errno.EWOULDBLOCK):
                 # a "real" error occurred, otheriwse there was just no data available
-                pass
-                # log.err("error_read", error=str(e))
+                log.err("error_read", error=str(e))
             return None
 
     def retransmit_packets(self):
         curr_time = time()
 
-        for data in self.packet_buffer.itervalues():
+        for seq,data in self.packet_buffer.iteritems():
             time_sent, msg = data["time_sent"], data["msg"]
 
             if self.rto and (curr_time - time_sent) > self.rto:
                 if self.send_packet(msg):
-                    log.info("packet_retransmit")
+                    log.info("packet_retransmit", seq_num = seq - DATA_SIZE) #the seq num in packet_buffer maps the end seq #
                     data["time_sent"] = curr_time
 
+                log.info("cwnd_reset", old=self.cwnd)
                 self.cwnd = 1
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ import time
 import datetime
 import select
 import json
+import traceback
 
 from logger import Logger
 
@@ -22,9 +23,10 @@ log = Logger({
     "port_bound": "[bound] {port}",
     "transfer_complete": "[completed]",
     "packet_recv": "[recv data] {start} ({length}) {status}",
-    "packet_corruct": "[recv corrupt packet]",
+    "packet_corrupt": "[recv corrupt packet]",
     "err_timeout": "[error] timeout waiting to read input data",
-    "packet_incomplete": "[error] packet send failed before completion"
+    "packet_incomplete": "[error] packet send failed before completion",
+    "out_of_order_print": "[out of order print] {start}"
 }, stdout=sys.stderr)
 
 
@@ -47,6 +49,9 @@ class Receiver():
         log.success("port_bound", port=UDP_PORT)
 
         self.next_sequence_to_print = 0
+
+        #buffer for receiving out-of-order packets
+        self.packet_buffer = {} #maps start seq nums to the data that needs to be printed when we get to that seq num
 
     def start(self):
         # Now listen for packets
@@ -71,33 +76,50 @@ class Receiver():
                     # If there is data, we accept it and print it out
                     if (data):
                         status = ""
+                        ack_num = seq + length
 
                         if seq == self.next_sequence_to_print:
                             status = "ACCEPTED (in-order)"
-
                             sys.stdout.write(data)
                             self.next_sequence_to_print += length
+                            self.ack(ack_num, addr)
 
-                            # Send back an ack to the sender
-                            msg = json.dumps({ "ack": seq + length })
-
-                            if self.sock.sendto(msg, addr) < len(msg):
-                                log.err("packet_incomplete")
-
+                            self.write_out_of_order_packets()
                         elif seq < self.next_sequence_to_print:
-                            status = "IGNORED"
+                            status = "DUPLICATE RECIEVED AND ACKED"
+                            self.ack(ack_num, addr)
                         elif seq > self.next_sequence_to_print:
                             status = "ACCEPTED (out-of-order)"
+                            self.ack(ack_num, addr)
+                            self.packet_buffer[seq] = data
 
                         log.success("packet_recv",
                             start=seq, length=length, status=status)
 
-                except (ValueError, KeyError, TypeError):
-                    pass
-                    # log.err("packet_corrupt")
+                except Exception, e:
+                    log.info("packet_corrupt")
             else:
-                log.err("err_timeout")
+                log.info("err_timeout")
                 raise RuntimeError("Error: read timeout")
+
+    def ack(self, ack_num, addr):
+        # Send back an ack to the sender
+        msg = json.dumps({"ack": ack_num})
+
+        if self.sock.sendto(msg, addr) < len(msg):
+            log.info("packet_incomplete")
+
+    def write_out_of_order_packets(self):
+        try:
+            data = self.packet_buffer.pop(self.next_sequence_to_print)
+            # made it here so we know data exists
+            log.info("out_of_order_print", start=self.next_sequence_to_print)
+            sys.stdout.write(data)
+            self.next_sequence_to_print += len(data)
+            self.write_out_of_order_packets() #see if there are any more to print
+        except Exception, e:
+            return
+
 
 
 if __name__ == "__main__":
