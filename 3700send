@@ -17,7 +17,7 @@ from logger import Logger
 
 MSG_SIZE = 1500
 DATA_SIZE = 1000
-TIMEOUT = 30
+SOCKET_TIMEOUT = .05 #time in seconds to wait for data when reading from socket
 # 0 means trust new RTT all the way
 # 1 means trust the old RTT all the way
 NEW_RTT_LEAN = .875
@@ -54,7 +54,7 @@ class Sender():
 
         # Set up the socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.settimeout(0)  # want the socket to be non-blocking
+        self.sock.settimeout(SOCKET_TIMEOUT)  # want the socket to be non-blocking
 
         self.sequence = 0
         self.cwnd = Decimal(1.0)  # floor(cwnd) = number of un-acked packets allowed to be in flight
@@ -77,7 +77,7 @@ class Sender():
 
                 self.ack_packets()
                 self.retransmit_packets()
-                sleep(.05) #idk why this is necessary but this stops it from hanging randomly
+                #sleep(.05) #idk why this is necessary but this stops it from hanging randomly
             log.success("transfer_complete")
             sys.stdout.flush()
         except Exception:
@@ -112,9 +112,6 @@ class Sender():
                 if decoded.get('fin_ack'):
                     #can end now
                     break
-            else:
-                #wait for an ack to show up
-                sleep(.01)
 
     def send_packets(self):
         while len(self.packet_buffer) < int(self.cwnd): #floor of cwnd
@@ -205,10 +202,7 @@ class Sender():
         # returns msg or None if unable to read, doesn't block
         try:
             return self.sock.recvfrom(MSG_SIZE)
-        except socket.error, e:
-            if e.args[0] not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                # a "real" error occurred, otheriwse there was just no data available
-                log.err("error_read", error=str(e))
+        except Exception:
             return None
 
     def retransmit_packets(self):

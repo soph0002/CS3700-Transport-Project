@@ -11,7 +11,7 @@ import errno
 
 from logger import Logger
 
-
+SOCKET_TIMEOUT = .05
 MSG_SIZE = 1500
 NUM_FIN_ACKS_TO_SEND = 5 #once we get the EOF, how many acks to send back
 # need to do this because there's no way to ensure delivery
@@ -37,7 +37,7 @@ class Receiver():
         # Set up the socket
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind(("", 0))
-        self.sock.settimeout(0)
+        self.sock.settimeout(SOCKET_TIMEOUT)
 
         # Get port we bound to
         UDP_PORT = int(self.sock.getsockname()[1])
@@ -55,10 +55,7 @@ class Receiver():
         # returns msg or None if unable to read, doesn't block
         try:
             return self.sock.recvfrom(MSG_SIZE)
-        except socket.error, e:
-            if e.args[0] not in (errno.EAGAIN, errno.EWOULDBLOCK):
-                # a "real" error occurred, otheriwse there was just no data available
-                log.err("error_read", error=str(e))
+        except Exception:
             return None
 
     def start(self):
