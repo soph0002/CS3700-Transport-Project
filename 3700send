@@ -26,6 +26,8 @@ RTO_TO_RTT_FACTOR = 5
 
 INITIAL_SS_THRESH = 10
 
+END_STATE_TIMEOUT = 5 #time in seconds of sending EOFs and waiting for an ack
+
 log = Logger({
     "eof": "[eof] reached EOF",
     "transfer_complete": "[sender completed]",
@@ -37,7 +39,8 @@ log = Logger({
     "rtt_update": "[rtt update] old: {old:1.3f}s, sample: {sample:1.3f}s, new: {new:1.3f}s",
     "cwnd_update": "[cwnd update] old: {old}, new: {new}",
     "cwnd_reset": "[cwnd RESET] old: {old}, new: 1",
-    "send_fin": "[sender sent fin]"
+    "send_fin": "[sender sent fin]",
+    "end_state_timeout": "[timeout] while waiting for an EOF ack"
 }, stdout=sys.stderr)
 
 
@@ -64,8 +67,6 @@ class Sender():
         #when cwnd < ssthresh, slow start (exponential increase), else congestion avoidance (linear increase)
         self.ssthresh = INITIAL_SS_THRESH
 
-        self.fin_ack_received = False #set to True once we have sent the 'eof' message AND received the ack for it
-
     def start(self):
         try:
             while True:
@@ -83,9 +84,16 @@ class Sender():
             traceback.print_exc()
 
     def end_state(self):
+        #we have sent and acked all the data
+        #now we just have to send the eof and ensure that the receiver gets it
         log.info("eof")
+        start = time()
 
         while True:
+            if (time() - start > END_STATE_TIMEOUT):
+                log.info("end_state_timeout")
+                break
+
             log.info("send_fin")
             self.sock.sendto(json.dumps({
                 "sequence": self.sequence,
@@ -99,17 +107,13 @@ class Sender():
 
             if result:
                 data, addr = result
-                try:
-                    decoded = json.loads(data)
+                decoded = json.loads(data)
 
-                    if decoded.get('fin_ack'):
-                        self.fin_ack_received = True
-                        break
-                    else:
-                        print "what"
-                except Exception:
-                    print "what2"
+                if decoded.get('fin_ack'):
+                    #can end now
+                    break
             else:
+                #wait for an ack to show up
                 sleep(.01)
 
     def send_packets(self):

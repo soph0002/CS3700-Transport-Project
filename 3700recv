@@ -13,8 +13,8 @@ from logger import Logger
 
 
 MSG_SIZE = 1500
-TIMEOUT = 5
-
+NUM_FIN_ACKS_TO_SEND = 5 #once we get the EOF, how many acks to send back
+# need to do this because there's no way to ensure delivery
 
 log = Logger({
     "port_bound": "[bound] {port}",
@@ -122,7 +122,7 @@ class Receiver():
         # Send back an ack to the sender
         msg = json.dumps({"fin_ack": True})
 
-        for i in range(5):
+        for i in range(NUM_FIN_ACKS_TO_SEND):
             if self.sock.sendto(msg, addr) < len(msg):
                 log.info("packet_incomplete")
             else:
