@@ -12,45 +12,45 @@ class Packet:
     # B - flags (8-bit integer)
     #       - 1st bit --> ACK flag
     #       - 2nd bit --> EOF flag
-    struct = Struct("! I B s")
+    struct = Struct("! I B")
 
-    def __init__(self, sequence, ack=False, eof=False, data=""):
+    def __init__(self, sequence, ack=False, eof=False, fin=False, data=""):
         self.sequence = sequence
         self.ack = ack
         self.eof = eof
+        self.fin = fin
         self.data = data
 
     def __str__(self):
-        if self.ack:
-            return "ACK packet (sequence: %d)" % self.sequence
-        else:
-            return "Data packet (sequence: %d, eof: %s, data: %d bytes)" % (
-                self.sequence, self.eof, len(self.data))
+        return repr(self)
 
     def __repr__(self):
-        if self.ack:
-            return "ACK(%d)" % self.sequence
-        else:
-            return "Data(%d, eof=%s, data=[...] (%d bytes))" % (
-                self.sequence, self.eof, len(self.data))
+        return "Packet(%d, ack=%s, eof=%s, fin=%s, data='%s')" % (
+            self.sequence, self.ack, self.eof, self.fin, self.data)
 
     @property
     def flags(self):
-        return 1 * self.ack + 2 * self.eof
+        return 1 * self.ack + 2 * self.eof + 4 * self.fin
 
     @property
     def packed(self):
         # TODO: determine best way to pack/unpack/represent flags
-        return self.struct.pack(self.sequence, self.flags, self.data)
+        return self.struct.pack(self.sequence, self.flags) + self.data
 
     @classmethod
     def from_packed(cls, raw):
-        sequence, flags, data = cls.struct.unpack(raw)
-        ack, eof = flags & 1, flags & 2
-        return cls(sequence, ack=ack, eof=eof, data=data)
+        (sequence, flags), data = cls.struct.unpack(raw[:5]), raw[5:]
+        ack, eof, fin = bool(flags & 1), bool(flags & 2), bool(flags & 4)
+        return cls(sequence, ack=ack, eof=eof, fin=fin, data=data)
 
-def ACKPacket(sequence):
+def AckPacket(sequence):
     return Packet(sequence, ack=True)
+
+def FinPacket(sequence):
+    return Packet(sequence, fin=True)
+
+def FinAckPacket(sequence):
+    return Packet(sequence, ack=True, fin=True)
 
 def DataPacket(sequence, eof=False, data=""):
     return Packet(sequence, eof=eof, data=data)
@@ -70,18 +70,18 @@ def test_packet(pkt):
     pkt_unpacked = Packet.from_packed(pkt_packed)
     print("%s packet (unpacked): %s" % (name, pkt_unpacked))
 
-    if pkt_unpacked.sequence == pkt.sequence:
+    if pkt_unpacked.sequence == pkt.sequence and \
+        pkt_unpacked.ack == pkt.ack and \
+        pkt_unpacked.eof == pkt.eof and \
+        pkt_unpacked.data == pkt.data:
+        # pkt_unpacked.fin == pkt.fin and
         print("%s successfully encoded and decoded" % pkt)
     else:
         print("%s encoding/decoding failed; got %s" % (pkt, pkt_unpacked))
 
-def test_ack(sequence):
-    test_packet(ACKPacket(sequence))
-
-def test_data(sequence, eof=False, data=""):
-    test_packet(DataPacket(sequence, eof=eof, data=data))
-
 if __name__ == "__main__":
-    test_ack(50)
-    test_data(100, eof=False, data="base test")
-    test_data(100, eof=True, data="endoffile test")
+    test_packet(AckPacket(1234))
+    test_packet(FinPacket(1234))
+    test_packet(FinAckPacket(1234))
+    test_packet(DataPacket(1234, eof=False, data="base test"))
+    test_packet(DataPacket(1234, eof=True, data="endoffile test"))
