@@ -1,0 +1,11 @@
+Essentially, we just tried to implement TCP as presented in the slides. We
+used a cwnd with AIMD and used selective acking. The sender would keep all 
+packets that had not been acked yet so that it would be able to retransmit on 
+RTO. Similarly, the receiver keeps track of packets it receives that are out of order and prints them in sequence when appropriate.
+
+Obviously, the challenging parts were dealing with high drop rates and retransmitting efficiently. Also, the EOF was an interesting case to solve. We ended
+up using an aggresive approach of sending multiple ack's to the EOF because
+there really is no way to ensure delivery.
+
+Testing was basically using the test script and debug statements. Seeing where the test
+script failed and then using the run script to see the logs and go from there.
