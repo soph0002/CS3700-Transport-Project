@@ -37,11 +37,10 @@ class Packet:
         # TODO: determine best way to pack/unpack/represent flags
         return self.struct.pack(self.sequence, self.flags) + self.data
 
-    @classmethod
-    def from_packed(cls, raw):
-        (sequence, flags), data = cls.struct.unpack(raw[:5]), raw[5:]
-        ack, eof, fin = bool(flags & 1), bool(flags & 2), bool(flags & 4)
-        return cls(sequence, ack=ack, eof=eof, fin=fin, data=data)
+def packet_from_raw(raw):
+    (sequence, flags), data = Packet.struct.unpack(raw[:5]), raw[5:]
+    ack, eof, fin = bool(flags & 1), bool(flags & 2), bool(flags & 4)
+    return Packet(sequence, ack=ack, eof=eof, fin=fin, data=data)
 
 def AckPacket(sequence):
     return Packet(sequence, ack=True)
